@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/mafredri/cdp"
 	"github.com/mafredri/cdp/devtool"
 	"github.com/mafredri/cdp/protocol/dom"
@@ -11,46 +12,23 @@ import (
 	"github.com/pubgo/dhtml/internal/cnst"
 	"github.com/pubgo/errors"
 	"io/ioutil"
-	"net/http"
 	"os/exec"
 	"sync"
 	"time"
 )
 
 type HeadlessResponse struct {
-	Status    int               `json:"status"`
-	Content   string            `json:"content"`
-	Headers   map[string]string `json:"headers"`
-	Latency   float64           `json:"latency"`
-	Url       string            `json:"url"`
-	StartTime int64             `json:"start_time"`
+	Status    int               `json:"status,omitempty"`
+	Content   string            `json:"content,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	Latency   float64           `json:"latency,omitempty"`
+	StartTime int64             `json:"start_time,omitempty"`
 }
 
 type Ccs struct {
 	tx  *sync.Mutex
 	tgt *devtool.Target
-	Url string
-	C   *cdp.Client
-}
-
-func checkHeadless(arg string) {
-	defer errors.Handle(func() {})
-
-	errors.Retry(3, func() {
-		resp, err := http.Get(arg + "/json/version")
-		errors.Wrap(err, "http get (%s) error", resp.Request.URL.String())
-		errors.T(resp.StatusCode != http.StatusOK, "check code error")
-		errors.Panic(resp.Body.Close())
-	})
-
-}
-
-func (t *Ccs) Loop() {
-	go errors.Ticker(func(dur time.Time) time.Duration {
-		checkHeadless(cnst.ChromeUrl)
-		return time.Second * 10
-	})
-
+	c   *cdp.Client
 }
 
 func (t *Ccs) ResponseImage(url string, tmt time.Duration, fn func(string)) {
@@ -59,10 +37,10 @@ func (t *Ccs) ResponseImage(url string, tmt time.Duration, fn func(string)) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
-	_, err := t.C.Page.Navigate(ctx, page.NewNavigateArgs(url))
+	_, err := t.c.Page.Navigate(ctx, page.NewNavigateArgs(url))
 	errors.Wrap(err, "mth Response Page.Navigate")
 
-	domContent, err := t.C.Page.DOMContentEventFired(ctx)
+	domContent, err := t.c.Page.DOMContentEventFired(ctx)
 	errors.Wrap(err, "mth Response Page.DOMContentEventFired")
 	defer domContent.Close()
 
@@ -74,7 +52,7 @@ func (t *Ccs) ResponseImage(url string, tmt time.Duration, fn func(string)) {
 
 	screenshotName := "screenshot.jpg"
 	screenshotArgs := page.NewCaptureScreenshotArgs().SetFormat("jpeg").SetQuality(80)
-	screenshot, err := t.C.Page.CaptureScreenshot(ctx, screenshotArgs)
+	screenshot, err := t.c.Page.CaptureScreenshot(ctx, screenshotArgs)
 	errors.Panic(err)
 
 	errors.Panic(ioutil.WriteFile(screenshotName, screenshot.Data, 0644))
@@ -93,34 +71,27 @@ func (t *Ccs) ResponseImage(url string, tmt time.Duration, fn func(string)) {
 	//fn(string(dd))
 }
 
-func (t *Ccs) Response(url string, tmt time.Duration, fn func(string)) {
+func (t *Ccs) Response(url string, tmt time.Duration, fn func(resp *HeadlessResponse)) {
 	defer errors.Handle(func() {})
 
 	t.tx.Lock()
 	defer t.tx.Unlock()
-	t.Url = url
-
-	t.response(url, tmt, fn)
-}
-
-func (t *Ccs) response(url string, tmt time.Duration, fn func(string)) {
-	defer errors.Handle(func() {})
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
 	timeStart := time.Now()
 
-	_, err := t.C.Page.Navigate(ctx, page.NewNavigateArgs(url))
+	_, err := t.c.Page.Navigate(ctx, page.NewNavigateArgs(url))
 	errors.Wrap(err, "mth Response Page.Navigate")
 
-	networkResponse, err := t.C.Network.ResponseReceived(ctx)
+	networkResponse, err := t.c.Network.ResponseReceived(ctx)
 	errors.Wrap(err, "mth Response Network.ResponseReceived")
 
 	responseReply, err := networkResponse.Recv()
 	errors.Wrap(err, "mth Response networkResponse.Recv")
 
-	domContent, err := t.C.Page.DOMContentEventFired(ctx)
+	domContent, err := t.c.Page.DOMContentEventFired(ctx)
 	errors.Wrap(err, "mth Response Page.DOMContentEventFired")
 	defer domContent.Close()
 
@@ -130,10 +101,10 @@ func (t *Ccs) response(url string, tmt time.Duration, fn func(string)) {
 	_, err = domContent.Recv()
 	errors.Wrap(err, "mth Response domContent.Recv")
 
-	doc, err := t.C.DOM.GetDocument(ctx, nil)
+	doc, err := t.c.DOM.GetDocument(ctx, nil)
 	errors.Wrap(err, "mth Response DOM.GetDocument")
 
-	result, err := t.C.DOM.GetOuterHTML(ctx, &dom.GetOuterHTMLArgs{
+	result, err := t.c.DOM.GetOuterHTML(ctx, &dom.GetOuterHTMLArgs{
 		NodeID: &doc.Root.NodeID,
 	})
 	errors.Wrap(err, "GetOuterHTML error")
@@ -142,28 +113,13 @@ func (t *Ccs) response(url string, tmt time.Duration, fn func(string)) {
 
 	responseHeaders := make(map[string]string)
 	errors.Wrap(json.Unmarshal(responseReply.Response.Headers, &responseHeaders), "mth Response json.Unmarshal")
-
-	dd, err := json.Marshal(&HeadlessResponse{
+	fn(&HeadlessResponse{
 		Content:   result.OuterHTML,
 		Status:    responseReply.Response.Status,
 		Headers:   responseHeaders,
 		Latency:   elapsed,
-		Url:       url,
 		StartTime: timeStart.Unix(),
 	})
-	errors.Wrap(err, "mth Response json.Marshal")
-
-	fn(string(dd))
-}
-
-func (t *Ccs) Close() {
-	defer errors.Handle(func() {})
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	t.C = nil
-	errors.Panic(devtool.New(cnst.ChromeUrl).Close(ctx, t.tgt))
 }
 
 func (t *Ccs) Reconnect() {
@@ -173,6 +129,10 @@ func (t *Ccs) Reconnect() {
 	defer cancel()
 
 	devt := devtool.New(cnst.ChromeUrl)
+
+	// 关闭连接
+	errors.Wrap(devtool.New(cnst.ChromeUrl).Close(ctx, t.tgt), "chrome关闭连接失败")
+
 	pt, err := devt.Create(ctx)
 	errors.Wrap(err, "mth Reconnect devt.Create")
 
@@ -180,28 +140,33 @@ func (t *Ccs) Reconnect() {
 	errors.Wrap(err, "mth Reconnect rpcc.DialContext")
 
 	t.tgt = pt
-	t.C = cdp.NewClient(conn)
-	t.Url = ""
+	t.c = cdp.NewClient(conn)
 
-	domContent, err := t.C.Page.DOMContentEventFired(ctx)
+	domContent, err := t.c.Page.DOMContentEventFired(ctx)
 	errors.Panic(err)
 	defer domContent.Close()
 
-	errors.Wrap(t.C.Page.Enable(ctx), "mth Reconnect Page.Enable")
+	errors.Wrap(t.c.Page.Enable(ctx), "mth Reconnect Page.Enable")
 
-	errors.Wrap(t.C.Network.Enable(ctx, nil), "mth Reconnect Network.Enable")
+	errors.Wrap(t.c.Network.Enable(ctx, nil), "mth Reconnect Network.Enable")
 
 	headers := make(map[string]string)
 	headersStr, err := json.Marshal(headers)
 	errors.Wrap(err, "mth Reconnect json.Marshal")
 
-	errors.Wrap(t.C.Network.SetExtraHTTPHeaders(ctx, network.NewSetExtraHTTPHeadersArgs(headersStr)), "mth Reconnect Network.SetExtraHTTPHeaders")
+	errors.Wrap(t.c.Network.SetExtraHTTPHeaders(ctx, network.NewSetExtraHTTPHeadersArgs(headersStr)), "mth Reconnect Network.SetExtraHTTPHeaders")
 }
 
-func (t *_config) InitChrome() {
+func (t *_config) killChrome() {
+	defer errors.Handle(func() {})
+
+	errors.Wrap(t.chrome.Process.Kill(), "chrome kill error")
+}
+
+func (t *_config) initChrome() {
 	errors.Handle(func() {})
 
-	cmd := exec.Command(
+	t.chrome = exec.Command(
 		"/tini",
 		"--",
 		"google-chrome",
@@ -220,8 +185,9 @@ func (t *_config) InitChrome() {
 		"--user-data-dir=/tmp",
 		"--crash-dumps-dir=/tmp",
 	)
+
 	//cmd.Stdout = os.Stderr
 	//cmd.Stderr = os.Stderr
 
-	errors.Wrap(cmd.Run(), "run chrome error")
+	errors.Wrap(t.chrome.Run(), "run chrome error")
 }
