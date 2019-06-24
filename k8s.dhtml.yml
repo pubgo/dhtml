@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dhtml
+spec:
+  selector:
+    matchLabels:
+      app:  dhtml
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app:  dhtml
+    spec:
+      containers:
+        - name:  dhtml
+          image: registry.cn-hangzhou.aliyuncs.com/ybase/dhtml:v1.1.0
+          env:
+            - name: count
+              value: 10
+          ports:
+            - containerPort: 8080
+
+      imagePullPolicy: Always
+      restartPolicy: Always
+      imagePullSecrets:
+        - name: aliyunsecret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name:  dhtml
+spec:
+  type: NodePort
+  ports:
+    - name: web
+      port: 8080
+      targetPort: 8080
+      nodePort: 31003
+  selector:
+    app: dhtml
