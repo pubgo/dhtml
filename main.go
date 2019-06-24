@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/pubgo/dhtml/internal/config"
+	"github.com/pubgo/dhtml/version"
 	"github.com/pubgo/errors"
 	"net/http"
 	nurl "net/url"
@@ -13,11 +14,19 @@ import (
 func main() {
 	cfg := config.Default()
 	cfg.Init()
-	go cfg.Check()
+	cfg.Check()
 
 	gin.SetMode(gin.ReleaseMode)
 
 	r := gin.New()
+	r.GET("/version", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, gin.H{
+			"version": version.Version,
+			"build":   version.BuildVersion,
+			"commit":  version.GitCommit,
+		})
+	})
+
 	r.GET("/", func(ctx *gin.Context) {
 		defer errors.Resp(func(err *errors.Err) {
 			ctx.JSON(http.StatusBadRequest, err.StackTrace())
