@@ -1,11 +1,9 @@
 package config
 
 import (
-	"github.com/pubgo/dhtml/internal/cnst"
 	"github.com/pubgo/errors"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"sync"
 	"time"
@@ -16,7 +14,7 @@ type _config struct {
 	reChromes chan *Ccs
 	count     int64
 	Debug     bool
-	chrome    *exec.Cmd
+	chromeUrl string
 }
 
 func (t *_config) ChromePop(fn func(*Ccs)) {
@@ -84,7 +82,7 @@ func (t *_config) Check() {
 			select {
 			case <-time.NewTimer(time.Second * 5).C:
 				errors.ErrHandle(errors.Try(errors.Retry, 3, func() {
-					resp, err := http.Get(cnst.ChromeUrl + "/json/version")
+					resp, err := http.Get(t.chromeUrl + "/json/version")
 					errors.Wrap(err, "http get (%s) error", resp.Request.URL.String())
 					errors.T(resp.StatusCode != http.StatusOK, "check code error")
 					errors.Panic(resp.Body.Close())

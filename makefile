@@ -60,5 +60,7 @@ docker_build: build_linux
 	@echo "构建docker镜像"
 	sudo docker build -t $(ImageName) .
 
+# https://github.com/Zenika/alpine-chrome
+#/Applications/Google\ Chrome\ Canary.app/Contents/MacOS/Google\ Chrome\ Canary --headless —remote-debugging-port=9222
 test_run:
 	docker run --rm -p 8080:8080 -p 9222:9222 -v $(pwd)/tmp:/tmp1 registry.cn-hangzhou.aliyuncs.com/ybase/dhtml:v1.1.1
