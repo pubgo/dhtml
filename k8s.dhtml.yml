@@ -16,8 +16,8 @@ spec:
         - name:  dhtml
           image: registry.cn-hangzhou.aliyuncs.com/ybase/dhtml:v1.1.0
           env:
-            - name: count
-              value: 10
+            - name: chrome_url
+              value: http://localhost:9222
           ports:
             - containerPort: 8080
 

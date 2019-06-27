@@ -63,5 +63,8 @@ docker_build: build_linux
 # https://github.com/Zenika/alpine-chrome
 #/Applications/Google\ Chrome\ Canary.app/Contents/MacOS/Google\ Chrome\ Canary --headless —remote-debugging-port=9222
 #https://github.com/chromedp/chromedp-proxy
+
+headless:
+	docker run -d -p 9222:9222 --rm --name headless-shell chromedp/headless-shell
 test_run:
 	docker run --rm -p 8082:8080 -p 9222:9222 -v $(pwd)/tmp:/tmp1 dhtml
