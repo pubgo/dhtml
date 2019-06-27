@@ -16,7 +16,7 @@ func main() {
 	cfg.Init()
 	cfg.Check()
 
-	gin.SetMode(gin.ReleaseMode)
+	//gin.SetMode(gin.ReleaseMode)
 
 	r := gin.New()
 	r.GET("/version", func(ctx *gin.Context) {

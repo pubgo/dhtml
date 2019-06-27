@@ -61,4 +61,4 @@ docker_build: build_linux
 	sudo docker build -t $(ImageName) .
 
 test_run:
-	docker run --rm -p 8080:8080 -p 9222:9222 -v $(pwd)/tmp:/tmp1 registry.cn-hangzhou.aliyuncs.com/ybase/dhtml:v1.1.1
+	docker run --rm -p 8082:8080 -p 9222:9222 -v $(pwd)/tmp:/tmp1 dhtml

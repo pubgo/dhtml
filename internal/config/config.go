@@ -57,15 +57,7 @@ func (t *_config) Init() {
 	}
 
 	// 初始化chrome
-	t.initChrome()
-
-	// 初始化chrome chan
-	c.chromes = make(chan *Ccs, t.count)
-	for i := 0; i < int(t.count); i++ {
-		c := &Ccs{tx: &sync.Mutex{}}
-		c.Reconnect()
-		t.chromes <- c
-	}
+	go t.initChrome()
 }
 
 func (t *_config) Count() int64 {
@@ -76,6 +68,20 @@ func (t *_config) ChromeCount() int {
 	return len(t.chromes)
 }
 
+func (t *_config) CheckChrome() {
+	errors.ErrHandle(errors.Try(errors.Retry, 3, func() {
+		resp, err := http.Get(cnst.ChromeUrl + "/json/version")
+		errors.Wrap(err, "http get (%s) error", resp.Request.URL.String())
+		errors.T(resp.StatusCode != http.StatusOK, "check code error")
+		errors.Panic(resp.Body.Close())
+	}), func(err *errors.Err) {
+		//	chrome 重启获取服务重启
+		err.P()
+		t.killChrome()
+		t.initChrome()
+	})
+}
+
 // chrome健康检查
 func (t *_config) Check() {
 	go func() {
@@ -83,16 +89,7 @@ func (t *_config) Check() {
 		for {
 			select {
 			case <-time.NewTimer(time.Second * 5).C:
-				errors.ErrHandle(errors.Try(errors.Retry, 3, func() {
-					resp, err := http.Get(cnst.ChromeUrl + "/json/version")
-					errors.Wrap(err, "http get (%s) error", resp.Request.URL.String())
-					errors.T(resp.StatusCode != http.StatusOK, "check code error")
-					errors.Panic(resp.Body.Close())
-				}), func(err *errors.Err) {
-					//	chrome 重启获取服务重启
-					t.killChrome()
-					t.initChrome()
-				})
+				t.CheckChrome()
 
 			case c := <-t.reChromes:
 				go func(_c *Ccs) {
@@ -102,7 +99,6 @@ func (t *_config) Check() {
 						err.P()
 					})
 				}(c)
-
 			}
 		}
 	}()

@@ -8,10 +8,14 @@ import (
 	"github.com/mafredri/cdp/protocol/dom"
 	"github.com/mafredri/cdp/protocol/network"
 	"github.com/mafredri/cdp/protocol/page"
+	"github.com/mafredri/cdp/protocol/target"
 	"github.com/mafredri/cdp/rpcc"
+	"github.com/mafredri/cdp/session"
 	"github.com/pubgo/dhtml/internal/cnst"
 	"github.com/pubgo/errors"
 	"io/ioutil"
+	"net/http"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -29,6 +33,19 @@ type Ccs struct {
 	tx  *sync.Mutex
 	tgt *devtool.Target
 	c   *cdp.Client
+
+	dev       *devtool.DevTools
+	conn      *rpcc.Conn
+	client    *cdp.Client
+	session   *session.Manager
+	contextID target.BrowserContextID
+}
+
+func NewDriver(opts ...Option) *Driver {
+	drv := new(Driver)
+	drv.options = newOptions(opts)
+	drv.dev = devtool.New(drv.options.Address)
+	return drv
 }
 
 func (t *Ccs) ResponseImage(url string, tmt time.Duration, fn func(string)) {
@@ -123,18 +140,29 @@ func (t *Ccs) Response(url string, tmt time.Duration, fn func(resp *HeadlessResp
 }
 
 func (t *Ccs) Reconnect() {
-	defer errors.Handle(func() {})
+	defer errors.Debug()
+
+
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
+	http.Get()
+
+	ver, err := t.dev.Version(ctx)
+	if err != nil {
+		return errors.Wrap(err, "failed to initialize driver")
+	}
+
 	devt := devtool.New(cnst.ChromeUrl)
 
 	// 关闭连接
-	errors.Wrap(devtool.New(cnst.ChromeUrl).Close(ctx, t.tgt), "chrome关闭连接失败")
+	if t.tgt != nil {
+		errors.Wrap(devtool.New(cnst.ChromeUrl).Close(ctx, t.tgt), "chrome关闭连接失败")
+	}
 
 	pt, err := devt.Create(ctx)
-	errors.Wrap(err, "mth Reconnect devt.Create")
+	errors.Wrap(err, "mth Reconnect devt Create")
 
 	conn, err := rpcc.DialContext(ctx, pt.WebSocketDebuggerURL)
 	errors.Wrap(err, "mth Reconnect rpcc.DialContext")
@@ -186,8 +214,20 @@ func (t *_config) initChrome() {
 		"--crash-dumps-dir=/tmp",
 	)
 
-	//cmd.Stdout = os.Stderr
-	//cmd.Stderr = os.Stderr
+	t.chrome.Stdout = os.Stdout
+	t.chrome.Stderr = os.Stderr
 
-	errors.Wrap(t.chrome.Run(), "run chrome error")
+	errors.Wrap(t.chrome.Start(), "run chrome error")
+
+	t.CheckChrome()
+
+	// 初始化chrome chan
+	c.chromes = make(chan *Ccs, t.count)
+	for i := 0; i < int(t.count); i++ {
+		c := &Ccs{tx: &sync.Mutex{}}
+		c.Reconnect()
+		t.chromes <- c
+	}
+
+	errors.Wrap(t.chrome.Wait(), "chrome wait error")
 }
