@@ -8,15 +8,13 @@ import (
 	"net/http"
 	nurl "net/url"
 	"strconv"
+	"sync"
 	"time"
 )
 
 func main() {
 	cfg := config.Default()
 	cfg.Init()
-	cfg.Check()
-
-	//gin.SetMode(gin.ReleaseMode)
 
 	r := gin.New()
 	r.GET("/version", func(ctx *gin.Context) {
@@ -27,9 +25,14 @@ func main() {
 		})
 	})
 
+	tx := &sync.Mutex{}
 	r.GET("/", func(ctx *gin.Context) {
+		tx.Lock()
+		defer tx.Unlock()
+
 		defer errors.Resp(func(err *errors.Err) {
 			ctx.JSON(http.StatusBadRequest, err.StackTrace())
+			errors.Panic(err)
 		})
 
 		url, _ := ctx.GetQuery("url")
@@ -48,12 +51,8 @@ func main() {
 			tm = a1
 		}
 
-		errors.T(cfg.ChromeCount() == 0, "超过最大并发量(%d), 请等待", cfg.Count())
-
-		cfg.ChromePop(func(c *config.Ccs) {
-			c.Response(url, time.Duration(tm), func(resp *config.HeadlessResponse) {
-				ctx.JSON(http.StatusOK, resp)
-			})
+		config.Response(url, time.Duration(tm), func(resp *config.HeadlessResponse) {
+			ctx.JSON(http.StatusOK, resp)
 		})
 	})
 

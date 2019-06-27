@@ -8,16 +8,8 @@ import (
 	"github.com/mafredri/cdp/protocol/dom"
 	"github.com/mafredri/cdp/protocol/network"
 	"github.com/mafredri/cdp/protocol/page"
-	"github.com/mafredri/cdp/protocol/target"
 	"github.com/mafredri/cdp/rpcc"
-	"github.com/mafredri/cdp/session"
-	"github.com/pubgo/dhtml/internal/cnst"
 	"github.com/pubgo/errors"
-	"io/ioutil"
-	"net/http"
-	"os"
-	"os/exec"
-	"sync"
 	"time"
 )
 
@@ -29,86 +21,60 @@ type HeadlessResponse struct {
 	StartTime int64             `json:"start_time,omitempty"`
 }
 
-type Ccs struct {
-	tx  *sync.Mutex
-	tgt *devtool.Target
-	c   *cdp.Client
+var devt *devtool.DevTools
 
-	dev       *devtool.DevTools
-	conn      *rpcc.Conn
-	client    *cdp.Client
-	session   *session.Manager
-	contextID target.BrowserContextID
-}
-
-func NewDriver(opts ...Option) *Driver {
-	drv := new(Driver)
-	drv.options = newOptions(opts)
-	drv.dev = devtool.New(drv.options.Address)
-	return drv
-}
-
-func (t *Ccs) ResponseImage(url string, tmt time.Duration, fn func(string)) {
+func Response(url string, tmt time.Duration, fn func(resp *HeadlessResponse)) {
 	defer errors.Handle(func() {})
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
-	defer cancel()
-
-	_, err := t.c.Page.Navigate(ctx, page.NewNavigateArgs(url))
-	errors.Wrap(err, "mth Response Page.Navigate")
-
-	domContent, err := t.c.Page.DOMContentEventFired(ctx)
-	errors.Wrap(err, "mth Response Page.DOMContentEventFired")
-	defer domContent.Close()
-
-	_, err = domContent.Recv()
-	errors.Panic(err)
-
-	// 等待
-	time.Sleep(time.Second * tmt)
-
-	screenshotName := "screenshot.jpg"
-	screenshotArgs := page.NewCaptureScreenshotArgs().SetFormat("jpeg").SetQuality(80)
-	screenshot, err := t.c.Page.CaptureScreenshot(ctx, screenshotArgs)
-	errors.Panic(err)
-
-	errors.Panic(ioutil.WriteFile(screenshotName, screenshot.Data, 0644))
-
-	//if err = t.C.Page.StartScreencast(ctx, page.NewStartScreencastArgs().SetEveryNthFrame(1).SetFormat("png")); err != nil {
-	//	return err
-	//}
-
-	// Random delay for our screencast.
-
-	//err = t.C.Page.StopScreencast(ctx)
-	//if err != nil {
-	//	return err
-	//}
-
-	//fn(string(dd))
-}
-
-func (t *Ccs) Response(url string, tmt time.Duration, fn func(resp *HeadlessResponse)) {
-	defer errors.Handle(func() {})
-
-	t.tx.Lock()
-	defer t.tx.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
+	cfg := Default()
+
+	if devt != nil {
+		_, err := devt.Version(ctx)
+		errors.Panic(err)
+	} else {
+		devt = devtool.New(cfg.chromeUrl)
+		errors.Retry(10, func() {
+			_v, err := devt.Version(ctx)
+			errors.Panic(err)
+			errors.P(_v)
+		})
+	}
+
+	pt, err := devt.Get(ctx, devtool.Page)
+	if err != nil {
+		pt, err = devt.Create(ctx)
+		errors.Panic(err)
+	}
+
+	conn, err := rpcc.DialContext(ctx, pt.WebSocketDebuggerURL)
+	errors.Wrap(err, "mth Reconnect rpcc.DialContext")
+
+	c := cdp.NewClient(conn)
+
+	errors.Wrap(c.Page.Enable(ctx), "mth Reconnect Page.Enable")
+	errors.Wrap(c.Network.Enable(ctx, nil), "mth Reconnect Network.Enable")
+
+	headers := make(map[string]string)
+	headersStr, err := json.Marshal(headers)
+	errors.Wrap(err, "mth Reconnect json.Marshal")
+
+	errors.Wrap(c.Network.SetExtraHTTPHeaders(ctx, network.NewSetExtraHTTPHeadersArgs(headersStr)), "mth Reconnect Network.SetExtraHTTPHeaders")
+
 	timeStart := time.Now()
 
-	_, err := t.c.Page.Navigate(ctx, page.NewNavigateArgs(url))
+	_, err = c.Page.Navigate(ctx, page.NewNavigateArgs(url))
 	errors.Wrap(err, "mth Response Page.Navigate")
 
-	networkResponse, err := t.c.Network.ResponseReceived(ctx)
+	networkResponse, err := c.Network.ResponseReceived(ctx)
 	errors.Wrap(err, "mth Response Network.ResponseReceived")
 
 	responseReply, err := networkResponse.Recv()
 	errors.Wrap(err, "mth Response networkResponse.Recv")
 
-	domContent, err := t.c.Page.DOMContentEventFired(ctx)
+	domContent, err := c.Page.DOMContentEventFired(ctx)
 	errors.Wrap(err, "mth Response Page.DOMContentEventFired")
 	defer domContent.Close()
 
@@ -118,10 +84,10 @@ func (t *Ccs) Response(url string, tmt time.Duration, fn func(resp *HeadlessResp
 	_, err = domContent.Recv()
 	errors.Wrap(err, "mth Response domContent.Recv")
 
-	doc, err := t.c.DOM.GetDocument(ctx, nil)
+	doc, err := c.DOM.GetDocument(ctx, nil)
 	errors.Wrap(err, "mth Response DOM.GetDocument")
 
-	result, err := t.c.DOM.GetOuterHTML(ctx, &dom.GetOuterHTMLArgs{
+	result, err := c.DOM.GetOuterHTML(ctx, &dom.GetOuterHTMLArgs{
 		NodeID: &doc.Root.NodeID,
 	})
 	errors.Wrap(err, "GetOuterHTML error")
@@ -137,97 +103,4 @@ func (t *Ccs) Response(url string, tmt time.Duration, fn func(resp *HeadlessResp
 		Latency:   elapsed,
 		StartTime: timeStart.Unix(),
 	})
-}
-
-func (t *Ccs) Reconnect() {
-	defer errors.Debug()
-
-
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	http.Get()
-
-	ver, err := t.dev.Version(ctx)
-	if err != nil {
-		return errors.Wrap(err, "failed to initialize driver")
-	}
-
-	devt := devtool.New(cnst.ChromeUrl)
-
-	// 关闭连接
-	if t.tgt != nil {
-		errors.Wrap(devtool.New(cnst.ChromeUrl).Close(ctx, t.tgt), "chrome关闭连接失败")
-	}
-
-	pt, err := devt.Create(ctx)
-	errors.Wrap(err, "mth Reconnect devt Create")
-
-	conn, err := rpcc.DialContext(ctx, pt.WebSocketDebuggerURL)
-	errors.Wrap(err, "mth Reconnect rpcc.DialContext")
-
-	t.tgt = pt
-	t.c = cdp.NewClient(conn)
-
-	domContent, err := t.c.Page.DOMContentEventFired(ctx)
-	errors.Panic(err)
-	defer domContent.Close()
-
-	errors.Wrap(t.c.Page.Enable(ctx), "mth Reconnect Page.Enable")
-
-	errors.Wrap(t.c.Network.Enable(ctx, nil), "mth Reconnect Network.Enable")
-
-	headers := make(map[string]string)
-	headersStr, err := json.Marshal(headers)
-	errors.Wrap(err, "mth Reconnect json.Marshal")
-
-	errors.Wrap(t.c.Network.SetExtraHTTPHeaders(ctx, network.NewSetExtraHTTPHeadersArgs(headersStr)), "mth Reconnect Network.SetExtraHTTPHeaders")
-}
-
-func (t *_config) killChrome() {
-	defer errors.Handle(func() {})
-
-	errors.Wrap(t.chrome.Process.Kill(), "chrome kill error")
-}
-
-func (t *_config) initChrome() {
-	errors.Handle(func() {})
-
-	t.chrome = exec.Command(
-		"/tini",
-		"--",
-		"google-chrome",
-		"--headless",
-		"--no-sandbox",
-		"--verbose=error",
-		"--disable-setuid-sandbox",
-		"--disable-new-tab-first-run",
-		"--disable-translate",
-		"--no-first-run",
-		"--disable-dev-shm-usage",
-		"--disable-gpu",
-		"--remote-debugging-address=0.0.0.0",
-		"--remote-debugging-port=9222",
-		"--disable-remote-fonts",
-		"--user-data-dir=/tmp",
-		"--crash-dumps-dir=/tmp",
-	)
-
-	t.chrome.Stdout = os.Stdout
-	t.chrome.Stderr = os.Stderr
-
-	errors.Wrap(t.chrome.Start(), "run chrome error")
-
-	t.CheckChrome()
-
-	// 初始化chrome chan
-	c.chromes = make(chan *Ccs, t.count)
-	for i := 0; i < int(t.count); i++ {
-		c := &Ccs{tx: &sync.Mutex{}}
-		c.Reconnect()
-		t.chromes <- c
-	}
-
-	errors.Wrap(t.chrome.Wait(), "chrome wait error")
 }
